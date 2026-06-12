@@ -235,15 +235,15 @@ DETECT → CONSTRAIN → STRATEGIZE; the DETECT layer is the objective function,
   capgate-shaped stdlib tool: grep `web/*.{html,js}` for dangerous DOM sinks (`innerHTML=`, `insertAdjacentHTML(`, `outerHTML`, `document.write`, `.srcdoc`, `eval(`, `new Function`, inline `on*=`), baseline + diff, fail on new usage so each earns a trusted/escaped review. No npm/Python/network. Pins what CodeQL's default suite won't phrase as project rules: index source-diff renders user-SVG coordinate text (must be `textContent`); footer.js `insertAdjacentHTML` (static = safe) + parity `table()` `innerHTML` (generated) baselined as known-safe. Fail-closed; wire into releasegate.
   Priority: P2
   Links: child-of=T-066; related=T-038,T-063
-- **T-069 — Repo-hardening strike list (give the gates teeth)** — *STARTED 2026-06-12 — 5/7 done; Scorecard + env protection remain.*
+- **T-069 — Repo-hardening strike list (give the gates teeth)** — *DONE 2026-06-12 — 7/7.*
   One pass of repo settings/toggles turning detection gates into enforced ones + adding free GitHub-native layers. Detection without this is advisory.
   - [x] Branch protection on `main` — force-push blocked, PR required, linear history; `enforce_admins=true`.
   - [x] Required status checks — the `ci.yml` `gates` job (vet / test / capgate / integritygate / pingate) is required + reported green on PR #1.
   - [x] Pages source = GitHub Actions — `pages.yml` is the deploy path.
   - [x] Secret scanning + push protection (enabled).
   - [x] Dependabot security alerts (enabled).
-  - [ ] OSSF Scorecard action (surfaces missing branch protection / signed releases) — tiny SHA-pinned workflow, verify-first. ~30 min, own PR.
-  - [ ] Deploy-environment protection — restrict the `github-pages` environment deploy-branch policy to `main`. ~5 min, gh api, no PR.
+  - [x] OSSF Scorecard action — `scorecard.yml`, SHA-pinned (scorecard-action v2.4.3, codeql-action upload-sarif); SARIF → Security tab.
+  - [x] Deploy-environment protection — `github-pages` environment restricted to `main` (custom branch policy, set by Pages).
   Priority: P1
   Links: child-of=T-066; related=T-057,T-038
 - **T-070 — Input resource bounds for untrusted SVG (anti-DoS)** — *OPEN — app robustness; separate axis from the SCA epic.*
