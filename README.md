@@ -50,8 +50,8 @@ svgsteg diff --a logo.svg --b logo.steg.svg --diff-out diff.png
 
 ## Web
 
-A WebAssembly build runs the encoder client-side — no upload, no server — and deploys to GitHub
-Pages via `pages.yml`.
+A WebAssembly build runs the encoder client-side — no upload, no server.
+**Live: <https://bgonz808.github.io/svg-steg/>** (deployed from `main` via `pages.yml`).
 
 ## Project
 

@@ -227,7 +227,7 @@ DETECT → CONSTRAIN → STRATEGIZE; the DETECT layer is the objective function,
   - Target shape: the gate-DAG — CI gates fed by a Renovate loop; publish = build → SBOM → scan → sign → attest → deploy. Base choice (golang:1.26-bookworm pinned vs Chainguard-mirror vs ubuntu) tracked here.
   Priority: P1
   Links: related=T-063,T-064,T-057,T-038,T-039,T-033
-- **T-067 — CodeQL default-setup code scanning (Go + JS)** — *OPEN — XSS/injection taint layer (1 of 3); serves T-038.*
+- **T-067 — CodeQL default-setup code scanning (Go + JS)** — *DONE 2026-06-12 — `code-scanning/default-setup` = configured (Go + JS).*
   Enable CodeQL default setup (Settings → Code security) — one toggle, no workflow file: free on public repos, GitHub-managed suite, auto-detects Go + JS, taint-tracks XSS/injection on push/PR/schedule. Default setup → no `codeql-action` to SHA-pin (adds a taint layer while reducing action surface). Generic flows; project-specific sink rule is T-068, wasm binary stays T-039/capgate. Verify on first run: Go autobuild with `-mod=vendor` (fall back to advanced + explicit build if it chokes).
   Priority: P2
   Links: child-of=T-066; related=T-038
@@ -235,15 +235,15 @@ DETECT → CONSTRAIN → STRATEGIZE; the DETECT layer is the objective function,
   capgate-shaped stdlib tool: grep `web/*.{html,js}` for dangerous DOM sinks (`innerHTML=`, `insertAdjacentHTML(`, `outerHTML`, `document.write`, `.srcdoc`, `eval(`, `new Function`, inline `on*=`), baseline + diff, fail on new usage so each earns a trusted/escaped review. No npm/Python/network. Pins what CodeQL's default suite won't phrase as project rules: index source-diff renders user-SVG coordinate text (must be `textContent`); footer.js `insertAdjacentHTML` (static = safe) + parity `table()` `innerHTML` (generated) baselined as known-safe. Fail-closed; wire into releasegate.
   Priority: P2
   Links: child-of=T-066; related=T-038,T-063
-- **T-069 — Repo-hardening strike list (give the gates teeth)** — *OPEN — enforcement + free native layers; child of T-066.*
+- **T-069 — Repo-hardening strike list (give the gates teeth)** — *STARTED 2026-06-12 — 5/7 done; Scorecard + env protection remain.*
   One pass of repo settings/toggles turning detection gates into enforced ones + adding free GitHub-native layers. Detection without this is advisory.
-  - [ ] Branch protection on `main` — block force-push, require PR, linear history.
-  - [ ] Required status checks — the `ci.yml` gates (vet / test / capgate / integritygate / pingate). PRE-REQ CLEARED: `ci.yml` exists + runs green (T-057); unblocked once the spine is pushed and the checks report once on a PR.
-  - [ ] Pages source = GitHub Actions — so `pages.yml` is the deploy path.
-  - [ ] Secret scanning + push protection (free on public repos).
-  - [ ] Dependabot security alerts (free).
-  - [ ] OSSF Scorecard action (surfaces missing branch protection / signed releases) — tiny SHA-pinned workflow, verify-first.
-  - [ ] Deploy-environment protection — the `github-pages` environment limits who/what can deploy.
+  - [x] Branch protection on `main` — force-push blocked, PR required, linear history; `enforce_admins=true`.
+  - [x] Required status checks — the `ci.yml` `gates` job (vet / test / capgate / integritygate / pingate) is required + reported green on PR #1.
+  - [x] Pages source = GitHub Actions — `pages.yml` is the deploy path.
+  - [x] Secret scanning + push protection (enabled).
+  - [x] Dependabot security alerts (enabled).
+  - [ ] OSSF Scorecard action (surfaces missing branch protection / signed releases) — tiny SHA-pinned workflow, verify-first. ~30 min, own PR.
+  - [ ] Deploy-environment protection — restrict the `github-pages` environment deploy-branch policy to `main`. ~5 min, gh api, no PR.
   Priority: P1
   Links: child-of=T-066; related=T-057,T-038
 - **T-070 — Input resource bounds for untrusted SVG (anti-DoS)** — *OPEN — app robustness; separate axis from the SCA epic.*
@@ -313,8 +313,8 @@ DETECT → CONSTRAIN → STRATEGIZE; the DETECT layer is the objective function,
   - Strictness tests (later): opt-in adversarial suite scoring an encode against the full attacker toolkit — source smell (T-013/T-015), the raster floor (T-043/T-044), and the statistical tests T-009 left out of scope (chi-square/RS/SPA on coordinate LSBs). Measure resistance instead of assuming it.
   Priority: P4
   Links: related=T-009,T-012,T-013,T-015,T-043,T-044
-- **T-025 — Public-release prep** — *OPEN — pre-public hygiene.*
-  Before the repo goes public: add `.gitignore` (exclude private/copyrighted assets, build artifacts (`*.exe`, `svgsteg.wasm`), local tool/temp dirs, `*.steg.svg`), write `README.md` (what it is, build, usage, offline/network-incapable posture), confirm `git ls-files` tracks nothing private. LICENSE already present.
+- **T-025 — Public-release prep** — *DONE 2026-06-12.*
+  `.gitignore` + `README.md` written; pre-push audit confirmed nothing private tracked. LICENSE present.
   Priority: P0
   Links: related=T-020
 - **T-026 — Codec registry + build tags** — *DONE 2026-06-10 00:22:09 PDT.*
