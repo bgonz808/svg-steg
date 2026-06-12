@@ -33,8 +33,12 @@ type target struct {
 	env  []string
 }
 
+// Both targets pin a fixed GOOS/GOARCH so the package surface is host-independent. The released
+// CLI is built on Linux (release-provenance), and the web build is GOOS=js; listing against the
+// host OS instead would add OS-specific internal stdlib packages (e.g. internal/syscall/unix on
+// Linux, equivalents on Windows) and make the baseline fail to port across dev machines and CI.
 var targets = []target{
-	{"cli", nil},
+	{"cli", []string{"GOOS=linux", "GOARCH=amd64"}},
 	{"wasm", []string{"GOOS=js", "GOARCH=wasm"}},
 }
 
@@ -51,10 +55,10 @@ func hasExcessCaps(p string) bool {
 // LINKED (post-DCE) — the binary-level companion to the source-level go-list check. nm can't
 // read wasm, so the wasm's host-import capability surface is covered separately (T-039).
 func checkBinary() (int, error) {
-	const tmp = "capgate.nm.exe"
+	const tmp = "capgate.nm.tmp"
 	defer os.Remove(tmp)
 	build := exec.Command("go", "build", "-trimpath", "-mod=vendor", "-o", tmp, "./cmd/svgsteg")
-	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")
 	if out, err := build.CombinedOutput(); err != nil {
 		return 0, fmt.Errorf("build: %s", strings.TrimSpace(string(out)))
 	}

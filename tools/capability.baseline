@@ -114,6 +114,7 @@ internal/profilerecord
 internal/race
 internal/reflectlite
 internal/runtime/atomic
+internal/runtime/cgroup
 internal/runtime/exithook
 internal/runtime/gc
 internal/runtime/gc/scan
@@ -121,15 +122,13 @@ internal/runtime/maps
 internal/runtime/math
 internal/runtime/pprof/label
 internal/runtime/sys
-internal/runtime/syscall/windows
+internal/runtime/syscall/linux
 internal/strconv
 internal/stringslite
 internal/sync
 internal/synctest
 internal/syscall/execenv
-internal/syscall/windows
-internal/syscall/windows/registry
-internal/syscall/windows/sysdll
+internal/syscall/unix
 internal/testlog
 internal/trace/tracev2
 internal/unsafeheader
@@ -159,7 +158,6 @@ slices
 sort
 strconv
 strings
-structs
 svgsteg/cmd/svgsteg
 sync
 sync/atomic
