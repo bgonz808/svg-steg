@@ -1,0 +1,27 @@
+/.*/
+!/.github/
+
+*.exe
+*.wasm
+/svgsteg
+*.test
+*.out
+
+# generated artifacts (wasm build, parity renders, publish output) — regenerable, never committed
+out/
+dist/
+
+*.svg
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+
+# committed static favicon (the *.svg rule above ignores generated/test SVGs)
+!web/favicon.svg
+
+.env
+.env.*
+.DS_Store
+Thumbs.db
