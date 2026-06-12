@@ -1,0 +1,140 @@
+# Release: reproducible build → SBOM → SLSA Build L3 provenance → keyless sign (Rekor).
+# See SUPPLY_CHAIN.md §7, §9.
+#
+# Action SHAs are PINNED to verified commits (two-protocol resolve + signature + ≥48h; the
+# slsa-github-generator commit is unsigned upstream — pinned by SHA under compensating
+# controls, see SUPPLY_CHAIN.md §11). NOT YET DEPLOYABLE: the cyclonedx-gomod install is
+# still @PIN_VERSION (bootstrap-pending, T-033) — pin + checksum-verify it before enabling.
+# Trigger neutralized to `workflow_dispatch` (manual-only) until then; restore `on: release`.
+#
+# L3 comes from the ISOLATED slsa-github-generator reusable workflow — the build job
+# cannot influence the provenance it emits. Signing is keyless (OIDC → Fulcio → Rekor);
+# there is no long-lived key to steal.
+
+name: release-provenance
+
+on:
+  # TARGET (restore when SLSA bootstrap + pins complete — T-033): release: { types: [published] }
+  workflow_dispatch: {} # manual-only until deployable (stubs / @PIN_VERSION) — see header
+
+permissions:
+  contents: read # least privilege by default; jobs widen explicitly
+
+env:
+  GOTOOLCHAIN: local
+  GOFLAGS: -mod=vendor
+  CGO_ENABLED: "0"
+
+jobs:
+  # 1) Reproducible build + SBOM; emit artifact hashes for the SLSA generator.
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Setup Go (exact)
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.26.4"
+          check-latest: false
+      - name: Release gate (reproducible build, nm invariants, provenance, govulncheck, vet, tests)
+        run: |
+          set -euxo pipefail
+          go run tools/releasegate.go   # 7/7 or this job fails
+      - name: Build release binary
+        run: |
+          set -euxo pipefail
+          go build -trimpath -ldflags="-s -w" -o svgsteg .
+          test -s svgsteg || { echo "::error::no binary"; exit 1; }
+      - name: SBOM + completeness gate (fail-closed)
+        run: |
+          set -euxo pipefail
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@PIN_VERSION
+          cyclonedx-gomod app -main . -std -json -output sbom.json
+          test -s sbom.json || { echo "::error::empty SBOM"; exit 1; }
+          go version -m svgsteg | awk '$1=="dep" || $1=="=>" {print $2}' | sort -u > linked.mods
+          jq -r '.. | .purl? // empty' sbom.json | sed -n 's#^pkg:golang/##p' | sed 's/@.*$//' | sort -u > sbom.mods
+          missing="$(comm -23 linked.mods sbom.mods || true)"
+          [ -z "$missing" ] || { echo "::error::SBOM INCOMPLETE:"; printf '%s\n' "$missing"; exit 1; }
+      - name: Hash subjects for SLSA
+        id: hash
+        run: |
+          set -euxo pipefail
+          echo "hashes=$(sha256sum svgsteg sbom.json | base64 -w0)" >> "$GITHUB_OUTPUT"
+      - name: Upload artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-artifacts
+          path: |
+            svgsteg
+            sbom.json
+          if-no-files-found: error
+
+  # 2) SLSA Build L3 provenance — isolated generator (non-falsifiable; OIDC keyless; Rekor).
+  provenance:
+    needs: [build]
+    permissions:
+      actions: read # read the triggering run
+      id-token: write # OIDC → Fulcio keyless signing
+      contents: write # attach provenance to the release
+    # v2.1.0 — SHA-pinned; upstream commit unsigned (SLSA TRW verifies its own ref at runtime). See SUPPLY_CHAIN.md §11.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
+    with:
+      base64-subjects: ${{ needs.build.outputs.hashes }}
+      provenance-name: svgsteg.intoto.jsonl
+      upload-assets: true
+
+  # 3) Keyless cosign signing + in-toto SBOM attestation (Rekor) + GitHub attestations.
+  sign:
+    needs: [build, provenance]
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write # OIDC keyless
+      contents: write
+      attestations: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Download artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-artifacts
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Keyless sign + SBOM attestation (Fulcio → Rekor)
+        run: |
+          set -euxo pipefail
+          cosign sign-blob --yes svgsteg \
+            --output-signature svgsteg.sig --output-certificate svgsteg.pem
+          cosign attest-blob --yes --type cyclonedx --predicate sbom.json svgsteg \
+            --output-attestation svgsteg.sbom.intoto.jsonl
+      - name: GitHub Artifact Attestation — build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: svgsteg
+      - name: GitHub Artifact Attestation — SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: svgsteg
+          sbom-path: sbom.json
+      - name: Publish signing artifacts to the release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-signing
+          path: |
+            svgsteg.sig
+            svgsteg.pem
+            svgsteg.sbom.intoto.jsonl
+          if-no-files-found: error

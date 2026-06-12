@@ -1,0 +1,8 @@
+// Shared credit footer — single source for index.html and parity.html.
+// Injected at runtime so the markup (and the steg-encoded LinkedIn mark) lives in one place.
+document.body.insertAdjacentHTML('beforeend',
+  '<footer class="credit"><a href="https://www.linkedin.com/in/robertjgonz/" target="_blank" rel="noopener"' +
+  ' title="This LinkedIn mark is steg-encoded with the profile URL — decode it with svgsteg.">' +
+  'Follow Robert&nbsp;J&nbsp;Gonzales on LinkedIn ' +
+  '<svg class="li-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 382 382" aria-hidden="true"><path fill="#0077b7" d="M347.4083 0H34.6071C15.471 0 0 15.471 0 34.6069v312.9079C0 366.529 15.471 382 34.6050 382h312.9080C366.529 382 382 366.529 382 347.4085V34.6066C382 15.471 366.529 0 347.4000 0M118.2000 329.8000c0 5.6000-4.502 10.1000-10.1000 10.1000H65.3000c-5.6040 0-10.1052-4.502-10.1133-10.1196V150.4120c0-5.6216 4.502-10.1215 10.1081-10.1080h42.8105c5.6025 0 10.1013 4.502 10.1232 10.1078zM86.7064 123.4104c-22.459 0-40.7166-18.2123-40.7125-40.7113S64.3206 42.1048 86.7156 42.1110s40.7223 18.2079 40.7220 40.7100-18.2207 40.7011-40.7019 40.7144M341.9200 330.7000a9.2000 9.2000 0 0 1-9.2000 9.2000H286.7000a9.2000 9.2040 0 0 1-9.2104-9.2116v-84.2116c0-12.6112 3.7115-55.021-32.8058-55.021-28.3047 0-34.1047 29.1119-35.2119 42.1119v97.1046a9.2108 9.2105 0 0 1-9.2110 9.2107h-44.4101a9.2100 9.2105 0 0 1-9.2110-9.2046V149.6099a9.2111 9.2109 0 0 1 9.2047-9.2105h44.4110a9.2047 9.2114 0 0 1 9.2111 9.2098v15.7101c10.497-15.8114 26.1116-27.9106 59.3103-27.9111 73.6110 0 73.1122 68.7047 73.131 106.472z"/></svg>' +
+  '</a></footer>');

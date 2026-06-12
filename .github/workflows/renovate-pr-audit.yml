@@ -1,0 +1,141 @@
+# Supply-chain audit on dependency PRs. See SUPPLY_CHAIN.md.
+#
+# FAIL-CLOSED: any tool error, empty output, incomplete SBOM, or missing data FAILS the
+# job. No `continue-on-error`; no `|| true` that hides a verdict. No auto-merge.
+#
+# Action SHAs are PINNED to verified commits (two-protocol resolve + signature + ≥48h).
+# NOT YET DEPLOYABLE: the scanner installs are still @PIN_VERSION (bootstrap-pending, T-033;
+# pin + checksum-verify per SUPPLY_CHAIN.md §11) and the CVE-diff + capability-diff
+# comparators are STUBS that `exit 1`. Implement those fail-closed before enabling.
+# Trigger neutralized to `workflow_dispatch` (manual-only) until then; restore `on: pull_request`.
+
+name: renovate-pr-audit
+
+on:
+  # TARGET (restore when scanner bootstrap + comparators land — T-033):
+  #   pull_request: { branches: [main] }   # scope to dependency PRs via a Renovate label/branch;
+  #   internal branches only — fork PRs lack safe context for this.
+  workflow_dispatch: {} # manual-only until deployable (stubs / @PIN_VERSION) — see header
+
+permissions:
+  contents: read # least privilege
+
+concurrency:
+  group: pr-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local # no surprise toolchain downloads
+  GOFLAGS: -mod=vendor
+  CGO_ENABLED: "0"
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04 # pinned runner image
+    steps:
+      - name: Harden runner (egress audit)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout (full history for base↔head diff)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Go (exact version, no auto-upgrade)
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.26.4"
+          check-latest: false
+
+      - name: Install scanners (PINNED + checksum-verified — SUPPLY_CHAIN.md §11)
+        run: |
+          set -euxo pipefail
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@PIN_VERSION
+          go install github.com/google/osv-scanner/cmd/osv-scanner@PIN_VERSION
+          go install github.com/google/capslock/cmd/capslock@PIN_VERSION
+          go install golang.org/x/vuln/cmd/govulncheck@PIN_VERSION
+          for t in cyclonedx-gomod osv-scanner capslock govulncheck; do
+            command -v "$t" >/dev/null || { echo "::error::$t failed to install"; exit 1; }
+          done
+
+      - name: Build binary (ground truth for SBOM + binary scan)
+        run: |
+          set -euxo pipefail
+          go build -trimpath -o svgsteg .
+          test -s svgsteg || { echo "::error::build produced no binary"; exit 1; }
+
+      - name: SBOM + COMPLETENESS GATE (fail-closed)
+        run: |
+          set -euxo pipefail
+          cyclonedx-gomod app -main . -std -json -output sbom.json
+          test -s sbom.json || { echo "::error::empty SBOM"; exit 1; }
+          # Ground truth: modules actually linked into the binary.
+          go version -m svgsteg | awk '$1=="dep" || $1=="=>" {print $2}' | sort -u > linked.mods
+          test -s linked.mods || { echo "::error::read 0 linked modules from binary"; exit 1; }
+          # Modules named in the SBOM (strip purl prefix + version).
+          jq -r '.. | .purl? // empty' sbom.json | sed -n 's#^pkg:golang/##p' | sed 's/@.*$//' | sort -u > sbom.mods
+          # Any LINKED module absent from the SBOM => incomplete => FAIL (no false negatives).
+          missing="$(comm -23 linked.mods sbom.mods || true)"
+          if [ -n "$missing" ]; then
+            echo "::error::SBOM INCOMPLETE — linked but not in SBOM:"; printf '%s\n' "$missing"; exit 1
+          fi
+          echo "SBOM completeness OK: $(wc -l < linked.mods) linked modules accounted for"
+
+      - name: CVE-posture DIFF (base↔head — fail on net-worse or scanner error)
+        run: |
+          set -euxo pipefail
+          scan() { # $1=label  $2=worktree
+            ( cd "$2"
+              osv-scanner scan source --recursive --format json . > "$GITHUB_WORKSPACE/osv.$1.json" \
+                || { echo "::error::osv-scanner failed @$1"; exit 1; }
+              govulncheck -json ./... > "$GITHUB_WORKSPACE/govuln.$1.json" \
+                || { echo "::error::govulncheck failed @$1"; exit 1; }
+            )
+          }
+          git worktree add ../base "${{ github.event.pull_request.base.sha }}"
+          scan head .
+          scan base ../base
+          # TODO (fail-closed): parse the four JSON reports, compute introduced = head − base.
+          #   If introduced ≠ ∅ -> exit 1 unless a reviewed 'sc-override' label is present.
+          #   Implement per each tool's schema; a parse error MUST exit 1, never pass.
+          echo "::warning::CVE-diff comparator is a stub — implement fail-closed before enabling"
+          exit 1
+
+      - name: Capability DIFF (capslock vs committed baseline — block new net/exec/unsafe)
+        run: |
+          set -euxo pipefail
+          capslock -output=json ./... > capslock.head.json || { echo "::error::capslock failed"; exit 1; }
+          test -f .capslock-baseline.json || { echo "::error::no .capslock-baseline.json committed"; exit 1; }
+          # TODO (fail-closed): set-diff capabilities head vs baseline. A new
+          #   CAPABILITY_NETWORK / _RUNTIME / _UNSAFE_POINTER / _FILES -> exit 1 (run the §3 ritual).
+          echo "::warning::capability comparator is a stub — implement fail-closed before enabling"
+          exit 1
+
+      - name: Scan the BINARY too (not only source)
+        run: |
+          set -euxo pipefail
+          govulncheck -mode binary ./svgsteg > govuln.binary.json \
+            || { echo "::error::binary govulncheck failed"; exit 1; }
+          # TODO: entropy / embedded-executable scan of vendored source; optional ClamAV/VT on any blob.
+
+      - name: deps.dev posture (Scorecard / OSV / license per changed dep)
+        run: |
+          set -euxo pipefail
+          # TODO (fail-closed): query the deps.dev API per changed module@version; threshold on
+          #   Scorecard / OSV / license; a query failure or below-threshold result -> exit 1.
+          echo "::warning::deps.dev step is a stub"
+
+      - name: Upload evidence (always)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr-audit-evidence
+          path: |
+            sbom.json
+            osv.*.json
+            govuln.*.json
+            capslock.head.json
+          if-no-files-found: error

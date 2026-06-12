@@ -1,0 +1,24 @@
+# CI gates — the in-repo, stdlib-only gates that must pass before merge. These are the checks
+# T-069 makes *required* (the teeth). SHA-pinned action, least-privilege, and the runner's Go
+# (the go.mod `go 1.26.4` directive makes GOTOOLCHAIN auto-fetch the exact toolchain, so there's
+# no setup-go action to pin). Container hardening (golang:1.26-bookworm pinned) is tracked in T-066.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - run: go vet -mod=vendor ./...
+      - run: go test -mod=vendor ./...
+      - run: go run tools/capgate.go               # capability-regression gate (source go-list + binary nm)
+      - run: go run tools/integritygate.go verify  # static SRI on web/*.html
+      - run: go run tools/pingate.go               # every workflow uses: pinned to a 40-hex commit SHA

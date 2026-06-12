@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="svgsteg: client-side (Go→WASM) LSB + plausibility-aware SVG steganography. Encode a URL, verify the round-trip, and visually compare original vs stego, all in your browser." />
+<title>svgsteg - LSB and plausibility aware SVG stego</title>
+<link rel="icon" href="favicon.svg" />
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#c9d1d9; --accent:#58a6ff; --warn:#f0883e;
+          --checker:#000 repeating-conic-gradient(#1c2128 0% 25%, #11151a 0% 50%) 50%/24px 24px; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  header { padding:14px 18px; border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:15px; font-weight:600; }
+  header p { margin:4px 0 0; color:#8b949e; font-size:12px; }
+  .bar { display:flex; flex-wrap:wrap; gap:14px; align-items:center;
+         padding:12px 18px; border-bottom:1px solid var(--line); background:var(--panel); }
+  .bar label { font-size:12px; color:#8b949e; display:flex; gap:6px; align-items:center; }
+  .modes button { background:var(--bg); color:var(--fg); border:1px solid var(--line);
+                  padding:5px 12px; border-radius:6px; cursor:pointer; font:inherit; }
+  .modes button.on { background:var(--accent); color:#06090f; border-color:var(--accent); }
+  input[type=file] { color:#8b949e; font:inherit; max-width:230px; }
+  input[type=range] { accent-color:var(--accent); }
+  main { padding:18px; }
+  #stage { position:relative; width:100%; max-width:760px; margin:0 auto;
+           background:var(--checker);
+           border:1px solid var(--line); border-radius:8px; overflow:hidden; min-height:240px; }
+  #stage img, #stage canvas { display:block; width:100%; height:auto; }
+  /* swipe */
+  .swipe { touch-action:none; } /* drag-to-reveal, don't scroll the page */
+  .swipe .layerB { position:absolute; inset:0; }
+  .swipe .divider { position:absolute; top:0; bottom:0; width:2px; background:var(--accent);
+                    box-shadow:0 0 8px var(--accent); pointer-events:none; }
+  .sideBySide { display:grid; grid-template-columns:1fr 1fr; gap:12px; max-width:1100px; margin:0 auto; }
+  .sideBySide.stack { grid-template-columns:1fr; max-width:760px; } /* wide images / narrow screens → top-and-bottom */
+  .sideBySide figure { margin:0; }
+  .sideBySide figcaption { font-size:11px; color:#8b949e; text-align:center; padding:4px; }
+  .sideBySide .frame { background:var(--checker); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .sideBySide img { display:block; width:100%; height:auto; }
+  #stats { max-width:760px; margin:14px auto 0; padding:12px 14px; background:var(--panel);
+           border:1px solid var(--line); border-radius:8px; font-size:13px; }
+  #stats b { color:var(--accent); } #stats .warn { color:var(--warn); }
+  .hint { color:#6e7681; font-size:11px; }
+  .note { max-width:760px; margin:18px auto 0; color:#6e7681; font-size:11px; line-height:1.6; }
+  .credit { text-align:center; padding:18px; margin-top:24px; border-top:1px solid var(--line); color:#8b949e; font-size:13px; }
+  .credit a { color:var(--fg); text-decoration:none; display:inline-flex; align-items:center; gap:8px; }
+  .credit a:hover { color:var(--accent); }
+  .li-mark { width:20px; height:20px; flex:0 0 auto; }
+  #codestrip { position:relative; max-width:760px; margin:8px auto 0; padding:7px 10px; background:var(--panel);
+               border:1px solid var(--line); border-radius:6px; font:12px/1.7 ui-monospace, monospace;
+               white-space:pre; overflow:hidden; min-height:1.7em; color:#8b949e; }
+  #codestrip .csLayerB { position:absolute; left:0; top:0; right:0; bottom:0; padding:7px 10px;
+                         background:var(--panel); white-space:pre; }
+  #codestrip .divider { position:absolute; top:0; bottom:0; width:2px; background:var(--accent);
+                        box-shadow:0 0 6px var(--accent); }
+  #codestrip .csTag { color:var(--accent); margin-right:8px; font-weight:600; }
+  #codestrip ins { background:#1a4d2e; color:#7ee787; text-decoration:none; }
+  #codestrip del { background:#5a1e1e; color:#ff7b72; text-decoration:line-through; }
+  #genbar input[type=text] { min-width:320px; flex:1; }
+  #genbar label:first-child { flex:1 1 320px; } /* let the URL field claim the row's slack */
+  #genbar input[type=number] { width:3.4em; }
+  .tune { font-size:12px; color:#8b949e; }
+  #gen { background:var(--accent); color:#06090f; border:none; border-radius:6px; padding:7px 14px; cursor:pointer; font:inherit; }
+  #dl { background:var(--accent); color:#06090f; border:none; border-radius:6px; padding:7px 14px;
+        font:inherit; font-weight:600; text-decoration:none; cursor:pointer; }
+  @media (max-width:520px) {
+    .bar { gap:10px; }
+    .bar label { width:100%; }
+    input[type=file] { max-width:100%; }
+    .modes { display:flex; width:100%; gap:8px; }
+    .modes button { flex:1; padding:12px 6px; } /* ≥44px touch targets */
+  }
+  @media (max-width:700px) { .sideBySide { grid-template-columns:1fr; } } /* narrow screens → top-and-bottom */
+</style>
+</head>
+<body>
+<header>
+  <h1>svgsteg - LSB and plausibility aware SVG stego</h1>
+  <p>See whether a steganographic edit to an SVG is visually detectable. Load the original (A) and its stego version (B), then compare by swipe, difference, or both — all rendering and pixel-diff math runs entirely in your browser.</p>
+</header>
+
+<div class="bar">
+  <label>original&nbsp;(A): <input type="file" id="fileA" accept=".svg,image/svg+xml"></label>
+  <label>stego&nbsp;(B): <input type="file" id="fileB" accept=".svg,image/svg+xml"></label>
+  <span class="modes" id="modes">
+    <button data-mode="swipe" class="on">Swipe A/B</button>
+    <button data-mode="diff">Difference</button>
+    <button data-mode="side">Both</button>
+  </span>
+  <label id="ampbar">diff amplify: <input type="range" id="amp" min="1" max="64" value="12"><span id="ampv" class="hint">12×</span></label>
+  <label id="dsbar" title="render the diff at 1/N resolution then nearest-neighbor upscale — makes sub-pixel changes blocky and prominent">downsample: <input type="range" id="ds" min="1" max="16" value="1"><span id="dsv" class="hint">1×</span></label>
+</div>
+
+<div class="bar" id="genbar">
+  <label>LinkedIn URL: <input type="text" id="url" placeholder="https://www.linkedin.com/in/you/"></label>
+  <span class="tune" title="decimal places written to each coordinate in the output">precision <input type="number" id="vp" value="1" min="0" max="8"></span>
+  <span class="tune" title="only embed in coordinates that already have at least this many decimals (integers stay untouched)">min&nbsp;decimals <input type="number" id="med" value="1" min="0" max="8"></span>
+  <label class="tune"><input type="checkbox" id="sub"> subdivide</label>
+  <button id="gen">Generate (B) from A</button>
+  <a id="dl" download="linkedin.steg.svg" hidden>⬇ Download SVG</a>
+  <span id="genmsg" class="hint"></span>
+</div>
+
+<main>
+  <div id="stage"></div>
+  <div class="sideBySide" id="side" style="display:none">
+    <figure><div class="frame"><img id="sideA"></div><figcaption>original (A)</figcaption></figure>
+    <figure><div class="frame"><img id="sideB"></div><figcaption>stego (B)</figcaption></figure>
+  </div>
+  <div id="codestrip" style="display:none"></div>
+  <div id="stats">Load two SVGs to compare. <span class="hint">(In the difference view, brighter red = larger per-pixel change, scaled by the amplify slider.)</span></div>
+  <p class="note">
+    SVG is rendered and diffed in <code>&lt;canvas&gt;</code> client-side — no renderer ships in the wasm, and
+    nothing leaves your browser.
+  </p>
+</main>
+
+<script src="footer.js" integrity="sha384-4ZkDFUvrF+CZkUWyzf74+NfA1HDJ71yUMYNwdc0s6Zp22NawJsb7+Rdrx9eRTlDT"></script>
+
+<script src="wasm_exec.js" integrity="sha384-PWCs+V4BDf9yY1yjkD/p+9xNEs4iEbuvq+HezAOJiY3XL5GI6VyJXMsvnjiwNbce"></script>
+<script>
+const els = {
+  fileA: document.getElementById('fileA'), fileB: document.getElementById('fileB'),
+  stage: document.getElementById('stage'), side: document.getElementById('side'),
+  sideA: document.getElementById('sideA'), sideB: document.getElementById('sideB'),
+  stats: document.getElementById('stats'), amp: document.getElementById('amp'),
+  ampv: document.getElementById('ampv'), ampbar: document.getElementById('ampbar'),
+  ds: document.getElementById('ds'), dsv: document.getElementById('dsv'), dsbar: document.getElementById('dsbar'),
+  codestrip: document.getElementById('codestrip'), modes: document.getElementById('modes'),
+  url: document.getElementById('url'), vp: document.getElementById('vp'),
+  med: document.getElementById('med'), sub: document.getElementById('sub'),
+  gen: document.getElementById('gen'), dl: document.getElementById('dl'),
+  genmsg: document.getElementById('genmsg'),
+};
+let svgA = null, svgB = null, imgA = null, imgB = null, mode = 'swipe';
+
+// Default carrier (A): the clean LinkedIn mini2 mark, inlined so the page lands working —
+// hit "Generate (B) from A" to embed a URL and watch the steg edit stay visually invisible.
+const DEFAULT_A = `<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="800" height="800" viewBox="0 0 382 382"><path fill="#0077b7" d="M347.445 0H34.555C15.471 0 0 15.471 0 34.555v312.889C0 366.529 15.471 382 34.555 382h312.889C366.529 382 382 366.529 382 347.444V34.555C382 15.471 366.529 0 347.445 0M118.207 329.844c0 5.554-4.502 10.056-10.056 10.056H65.345c-5.554 0-10.056-4.502-10.056-10.056V150.403c0-5.554 4.502-10.056 10.056-10.056h42.806c5.554 0 10.056 4.502 10.056 10.056zM86.748 123.432c-22.459 0-40.666-18.207-40.666-40.666S64.289 42.1 86.748 42.1s40.666 18.207 40.666 40.666-18.206 40.666-40.666 40.666M341.91 330.654a9.247 9.247 0 0 1-9.246 9.246H286.73a9.247 9.247 0 0 1-9.246-9.246v-84.168c0-12.556 3.683-55.021-32.813-55.021-28.309 0-34.051 29.066-35.204 42.11v97.079a9.246 9.246 0 0 1-9.246 9.246h-44.426a9.247 9.247 0 0 1-9.246-9.246V149.593a9.247 9.247 0 0 1 9.246-9.246h44.426a9.247 9.247 0 0 1 9.246 9.246v15.655c10.497-15.753 26.097-27.912 59.312-27.912 73.552 0 73.131 68.716 73.131 106.472z"/></svg>`;
+
+function readSVG(file, cb) {
+  const r = new FileReader();
+  r.onload = () => cb(r.result);
+  r.readAsText(file);
+}
+function toImage(svgText) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml' }));
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = rej;
+    im.src = url;
+  });
+}
+async function loadSVGText(which, txt) {
+  if (which === 'a') { svgA = txt; imgA = await toImage(txt); }
+  else { svgB = txt; imgB = await toImage(txt); }
+  render();
+}
+async function onFile(which, file) {
+  if (!file) return;
+  readSVG(file, (txt) => loadSVGText(which, txt));
+}
+function targetSize() {
+  const ref = imgA || imgB; if (!ref) return [480, 480];
+  let w = ref.naturalWidth || 480, h = ref.naturalHeight || 480;
+  const longest = Math.max(w, h), scale = 560 / longest;
+  return [Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale))];
+}
+function drawTo(img, w, h) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, w, h);
+  return ctx;
+}
+function setMode(m) {
+  mode = m;
+  [...els.modes.children].forEach(b => b.classList.toggle('on', b.dataset.mode === m));
+  els.side.style.display = m === 'side' ? 'grid' : 'none';
+  els.stage.style.display = m === 'side' ? 'none' : 'block';
+  els.ampbar.style.display = els.dsbar.style.display = m === 'diff' ? '' : 'none'; // amplify + downsample only matter in Difference
+  render();
+}
+function render() {
+  els.codestrip.style.display = (svgA && svgB) ? 'block' : 'none'; // source-line strip under every visual mode
+  if (mode === 'side') {
+    if (svgA) els.sideA.src = imgA.src; if (svgB) els.sideB.src = imgB.src;
+    const ref = imgA || imgB; // wide images read better stacked top-and-bottom than side-by-side
+    els.side.classList.toggle('stack', !!ref && ref.naturalWidth / (ref.naturalHeight || 1) >= 1.4);
+    els.stats.textContent = 'Both — A (original) vs B (stego).';
+    stripInlineDiff(); return;
+  }
+  if (!imgA || !imgB) {
+    els.stats.innerHTML = imgA
+      ? '<b>Generate (B) from A</b> to embed a URL — the steg edit is visually invisible — or load your own stego (B).'
+      : 'Load an original <b>(A)</b> and a stego <b>(B)</b> SVG.';
+  }
+  els.stage.className = '';
+  els.stage.innerHTML = '';
+  if (mode === 'swipe') return renderSwipe();
+  if (mode === 'diff') { renderDiff(); stripInlineDiff(); return; }
+}
+function renderSwipe() {
+  els.stage.className = 'swipe';
+  if (imgA) { const a = new Image(); a.src = imgA.src; a.style.display = 'block'; els.stage.appendChild(a); }
+  // source strip: A's code as the base, B's overlaid + clipped in lockstep with the image divider
+  const samp = sampleSrc();
+  let stripB = null, stripDiv = null;
+  if (samp) {
+    const al = alignWindows(samp.a, samp.b); // pad changed tokens so A & B line up column-for-column
+    els.codestrip.textContent = al.a;
+    stripB = document.createElement('span'); stripB.className = 'csLayerB'; stripB.textContent = al.b;
+    stripDiv = document.createElement('span'); stripDiv.className = 'divider';
+    els.codestrip.appendChild(stripB); els.codestrip.appendChild(stripDiv);
+  } else { els.codestrip.innerHTML = '<span class="csTag">Δ</span><span class="hint">no source change to sample</span>'; }
+  if (imgB) {
+    const wrap = document.createElement('div'); wrap.className = 'layerB';
+    const b = new Image(); b.src = imgB.src; wrap.appendChild(b);
+    const div = document.createElement('div'); div.className = 'divider';
+    els.stage.appendChild(wrap); els.stage.appendChild(div);
+    const move = (x) => {
+      const r = els.stage.getBoundingClientRect();
+      const px = Math.max(0, Math.min(r.width, x - r.left));
+      const frac = r.width ? px / r.width : 0.5;
+      wrap.style.clipPath = `inset(0 ${r.width - px}px 0 0)`;
+      div.style.left = px + 'px';
+      if (stripB) { stripB.style.clipPath = `inset(0 ${(1 - frac) * 100}% 0 0)`; stripDiv.style.left = (frac * 100) + '%'; }
+    };
+    move(els.stage.getBoundingClientRect().width / 2);
+    els.stage.onpointermove = (e) => move(e.clientX); // mouse + touch + pen
+  }
+  if (imgA && imgB) els.stats.innerHTML = 'Swipe to reveal <b>A</b> vs <b>B</b> — the image <em>and</em> the source line below move together.';
+}
+function renderDiff() {
+  if (!imgA || !imgB) return;
+  const [W, H] = targetSize();
+  const f = Math.max(1, +els.ds.value);                              // downsample: rasterize the diff at 1/f res…
+  const w = Math.max(1, Math.round(W / f)), h = Math.max(1, Math.round(H / f));
+  const a = drawTo(imgA, w, h).getImageData(0, 0, w, h).data;
+  const b = drawTo(imgB, w, h).getImageData(0, 0, w, h).data;
+  const amp = +els.amp.value;
+  // Amplified diff visualization (display-only, JS).
+  const out = document.createElement('canvas'); out.width = w; out.height = h;
+  if (f > 1) out.style.imageRendering = 'pixelated';                 // …then nearest-neighbor upscale to stage width
+  const octx = out.getContext('2d'); const od = octx.createImageData(w, h); const o = od.data;
+  for (let i = 0; i < a.length; i += 4) {
+    const d = Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2]));
+    const v = Math.min(255, d * amp);
+    o[i] = v; o[i + 1] = v ? Math.min(80, v) : 0; o[i + 2] = 0; o[i + 3] = 255;
+  }
+  octx.putImageData(od, 0, 0);
+  els.stage.appendChild(out);
+  // Stats: the SHARED Go math via the wasm (diffPixels) — identical to the native build, RGBA +
+  // per-channel mean. JS fallback (RGB) only while the wasm is still loading.
+  let pct, maxd, mean, src;
+  if (wasmReady && window.svgstegDiffPixels) {
+    const r = window.svgstegDiffPixels(new Uint8Array(a.buffer), new Uint8Array(b.buffer), w, h);
+    if (r && !r.error) { pct = r.changedPct; maxd = r.maxDelta; mean = r.meanDelta; src = 'wasm diffPixels (parity with native)'; }
+  }
+  if (pct === undefined) {
+    let changed = 0, mx = 0, sum = 0; const n = w * h;
+    for (let i = 0; i < a.length; i += 4) {
+      const d = Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2]));
+      if (d > 0) changed++; if (d > mx) mx = d; sum += d;
+    }
+    pct = 100 * changed / n; maxd = mx; mean = sum / n; src = 'js fallback (wasm loading)';
+  }
+  const verdict = (pct < 0.1 && maxd <= 8) ? '' : ' class="warn"';
+  els.stats.innerHTML =
+    `difference @ ${w}×${h}: changed pixels <b>${pct.toFixed(4)}%</b> · ` +
+    `max channel Δ <b${verdict}>${maxd}</b> · mean Δ <b>${mean.toFixed(4)}</b> ` +
+    `<span class="hint">(${src})</span>`;
+}
+// --- source (text) diff: token-level, so you SEE which coordinate bytes the stego changed ---
+function escHTML(s) { return s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+function tokenize(s) { return s.split(/([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)/).filter(t => t !== ''); } // numbers are their own tokens
+function coarseDiff(a, b) { // O(n) fallback for very large inputs: common prefix/suffix + one middle block
+  let p = 0; while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  let s = 0; while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+  const ops = [];
+  if (p) ops.push({ t: 'eq', v: a.slice(0, p) });
+  if (p < a.length - s) ops.push({ t: 'del', v: a.slice(p, a.length - s) });
+  if (p < b.length - s) ops.push({ t: 'ins', v: b.slice(p, b.length - s) });
+  if (s) ops.push({ t: 'eq', v: a.slice(a.length - s) });
+  return ops;
+}
+function tokenDiff(A, B) { // LCS over token arrays
+  const n = A.length, m = B.length;
+  if (n > 4000 || m > 4000) return coarseDiff(A.join(''), B.join(''));
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const ops = []; let i = 0, j = 0;
+  const push = (t, v) => { const l = ops[ops.length - 1]; if (l && l.t === t) l.v += v; else ops.push({ t, v }); };
+  while (i < n && j < m) {
+    if (A[i] === B[j]) { push('eq', A[i]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { push('del', A[i]); i++; }
+    else { push('ins', B[j]); j++; }
+  }
+  while (i < n) push('del', A[i++]);
+  while (j < m) push('ins', B[j++]);
+  return ops;
+}
+function ctx(v, hasPrev, hasNext, C) { // keep only C chars of context next to a change; collapse the rest
+  const keepStart = hasPrev ? C : 0, keepEnd = hasNext ? C : 0;
+  if (v.length <= keepStart + keepEnd + 16) return escHTML(v);
+  return (keepStart ? escHTML(v.slice(0, keepStart)) : '') +
+    `<span class="elide"> ⋯ ${v.length - keepStart - keepEnd} chars ⋯ </span>` +
+    (keepEnd ? escHTML(v.slice(v.length - keepEnd)) : '');
+}
+function renderSource() {
+  if (!svgA || !svgB) { els.srcdiff.innerHTML = ''; els.stats.innerHTML = 'Load <b>both</b> A and B (or Generate B) to see the source diff.'; return; }
+  const ops = tokenDiff(tokenize(svgA), tokenize(svgB));
+  const add = ops.filter(o => o.t === 'ins').length, del = ops.filter(o => o.t === 'del').length;
+  if (!add && !del) { els.srcdiff.innerHTML = '<span class="hint">— identical — A and B have the same source bytes.</span>'; els.stats.innerHTML = 'source diff: no changes (A == B).'; return; }
+  els.srcdiff.innerHTML = ops.map((o, k) =>      // only the changed bytes + ±24 chars of context; long equal runs collapse
+    o.t === 'ins' ? `<ins>${escHTML(o.v)}</ins>` :
+    o.t === 'del' ? `<del>${escHTML(o.v)}</del>` :
+    ctx(o.v, k > 0, k < ops.length - 1, 24)).join('');
+  els.stats.innerHTML = `source diff: <b class="warn">${add}</b> added · <b class="warn">${del}</b> removed region(s) · ` +
+    `<b>${svgB.length - svgA.length >= 0 ? '+' : ''}${svgB.length - svgA.length}</b> bytes ` +
+    `<span class="hint">(green = added, red strike = removed; long unchanged runs are elided)</span>`;
+}
+
+// A window of A & B source around the FIRST change (same start offset, so they align until the edit).
+function sampleSrc(W = 110) {
+  if (!svgA || !svgB) return null;
+  let p = 0; while (p < svgA.length && p < svgB.length && svgA[p] === svgB[p]) p++;
+  if (p >= svgA.length && p >= svgB.length) return null; // identical
+  const start = Math.max(0, p - 32);
+  return { a: svgA.slice(start, start + W), b: svgB.slice(start, start + W) };
+}
+// Align A & B column-for-column by padding each changed token to the wider of the two with
+// spaces — so equal runs line up and a replaced value sits in the SAME columns in both, and the
+// swipe cursor reveals the same coordinate in A vs B.
+function alignWindows(a, b) {
+  const ops = tokenDiff(tokenize(a), tokenize(b));
+  let A = '', B = '';
+  for (let k = 0; k < ops.length; k++) {
+    const o = ops[k], n = ops[k + 1];
+    if (o.t === 'eq') { A += o.v; B += o.v; }
+    else if (o.t === 'del' && n && n.t === 'ins') { const w = Math.max(o.v.length, n.v.length); A += o.v.padEnd(w); B += n.v.padEnd(w); k++; }
+    else if (o.t === 'ins' && n && n.t === 'del') { const w = Math.max(o.v.length, n.v.length); A += n.v.padEnd(w); B += o.v.padEnd(w); k++; }
+    else if (o.t === 'del') { A += o.v; B += ' '.repeat(o.v.length); }
+    else { A += ' '.repeat(o.v.length); B += o.v; }
+  }
+  return { a: A, b: B };
+}
+// Difference/Both: inline A→B diff of the sample window, under the rendering.
+function stripInlineDiff() {
+  const s = sampleSrc();
+  if (!s) { els.codestrip.innerHTML = '<span class="csTag">Δ</span><span class="hint">no source change to sample</span>'; return; }
+  const ops = tokenDiff(tokenize(s.a), tokenize(s.b));
+  els.codestrip.innerHTML = '<span class="csTag">Δ</span>' + ops.map(o =>
+    o.t === 'eq' ? escHTML(o.v) : o.t === 'ins' ? `<ins>${escHTML(o.v)}</ins>` : `<del>${escHTML(o.v)}</del>`).join('');
+}
+
+els.fileA.onchange = e => onFile('a', e.target.files[0]);
+els.fileB.onchange = e => onFile('b', e.target.files[0]);
+els.modes.onclick = e => { if (e.target.dataset.mode) setMode(e.target.dataset.mode); };
+els.amp.oninput = () => { els.ampv.textContent = els.amp.value + '×'; if (mode === 'diff') render(); };
+els.ds.oninput = () => { els.dsv.textContent = els.ds.value + '×'; if (mode === 'diff') render(); };
+
+// --- WASM encoder: carrier (A) + URL -> generated B, entirely client-side ---
+let wasmReady = false;
+const go = new Go();
+function startWasm(instance) {
+  go.run(instance); wasmReady = !!window.svgstegEncode;
+  els.genmsg.textContent = wasmReady ? 'encoder ready' : 'encoder not exposed';
+}
+const WASM_SRI = "{{wasm-integrity}}"; // filled by publish.go for dist; placeholder in raw web/ dev
+(async () => { // verify the wasm bytes before instantiating (tag integrity can't cover wasm)
+  try {
+    const buf = await (await fetch('out/svgsteg.wasm')).arrayBuffer();
+    if (WASM_SRI.startsWith('sha384-')) {
+      const d = await crypto.subtle.digest('SHA-384', buf);
+      const got = 'sha384-' + btoa(String.fromCharCode(...new Uint8Array(d)));
+      if (got !== WASM_SRI) { els.genmsg.textContent = 'wasm integrity check failed'; return; }
+    } else { console.warn('wasm integrity unverified (raw dev build)'); }
+    startWasm((await WebAssembly.instantiate(buf, go.importObject)).instance);
+  } catch (e) { els.genmsg.textContent = 'wasm load failed: ' + e; }
+})();
+
+els.gen.onclick = async () => {
+  const msg = (t, warn) => { els.genmsg.textContent = t; els.genmsg.className = warn ? 'warn' : 'hint'; };
+  if (!wasmReady) return msg('encoder still loading…', true);
+  if (!svgA) return msg('upload a carrier SVG as original (A) first', true);
+  const url = els.url.value.trim();
+  if (!url) return msg('enter a LinkedIn URL', true);
+  // The wasm (svgstegEncode) is the authoritative LinkedIn-only gate; this is just UX.
+  const r = window.svgstegEncode(svgA, url, {
+    visiblePrecision: +els.vp.value, minExistingDecimals: +els.med.value,
+    subdivide: els.sub.checked, compression: 'auto',
+  });
+  if (!r || r.error) return msg((r && r.error) || 'encode failed', true);
+  svgB = r.svg;
+  imgB = await toImage(svgB);
+  els.dl.href = URL.createObjectURL(new Blob([svgB], { type: 'image/svg+xml' }));
+  els.dl.hidden = false;
+  msg(`${r.verified ? '✓ B verified decodable · ' : ''}+${r.outputBytes - r.inputBytes}B grow · stream ${r.streamBytes}B · comp ${r.compression}`);
+  render();
+};
+setMode('swipe');
+loadSVGText('a', DEFAULT_A); // preload the clean mini2 as carrier A so the page lands working
+</script>
+</body>
+</html>

@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>renderer parity sweep — oksvg ↔ browser</title>
+<link rel="icon" href="favicon.svg" />
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#c9d1d9; --mut:#8b949e; --accent:#58a6ff; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); margin: 0 auto; padding: 20px 16px 48px; max-width: 960px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h3 { font-size: 14px; margin: 22px 0 6px; }
+  .hint { color: var(--mut); font-size: 12px; }
+  #status { color: #f0883e; font-variant-numeric: tabular-nums; }
+  code { color: #79c0ff; }
+  .tw { overflow-x: auto; margin-top: 6px; -webkit-overflow-scrolling: touch; } /* h-scroll on narrow screens */
+  table { border-collapse: collapse; width: 100%; min-width: 520px; table-layout: fixed; } /* fixed = uniform, aligned columns */
+  th, td { border: 1px solid var(--line); padding: 6px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  th { text-align: left; color: var(--mut); background: var(--panel); font-weight: 600; }
+  td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  td:first-child, th:first-child { position: sticky; left: 0; width: 78px; text-align: right; color: var(--mut); background: var(--bg); z-index: 1; } /* fixed R column; wide enough for "1024px", stays put while h-scrolling */
+  th:first-child { background: var(--panel); }
+  td.cell { cursor: pointer; }
+  td.cell:hover { outline: 2px solid var(--accent); outline-offset: -2px; } /* outline, not bg, so the heatmap shows through */
+  td.sel { box-shadow: inset 0 0 0 2px var(--accent); }
+  .legend { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 72px; height: 9px; border-radius: 5px; background: linear-gradient(90deg, hsla(145,75%,45%,.5), hsla(72,75%,45%,.5), hsla(0,75%,45%,.55)); }
+  #viewer { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .views { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
+  canvas.view { width: min(280px, 90vw); height: auto; aspect-ratio: 1 / 1; image-rendering: pixelated; background: #fff; border: 1px solid var(--line); border-radius: 6px; }
+  figure { margin: 0; } figcaption { color: var(--mut); font-size: 12px; text-align: center; margin-top: 6px; }
+  input[type=range] { vertical-align: middle; accent-color: var(--accent); }
+  @media (max-width: 560px) { th, td { padding: 5px 7px; } body { padding: 14px 10px 40px; } h1 { font-size: 16px; } }
+  .dep-note { max-width: 760px; margin: 28px auto 0; padding: 12px 16px; border-radius: 8px; font-size: 12px;
+              line-height: 1.6; background: #2b2410; border: 1px solid #6b5d1e; color: #e3d27a; }
+  .dep-note a { color: #f0c674; }
+  .credit { text-align: center; padding: 18px; margin-top: 24px; border-top: 1px solid var(--line); color: var(--mut); font-size: 13px; }
+  .credit a { color: var(--fg); text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
+  .credit a:hover { color: var(--accent); }
+  .li-mark { width: 20px; height: 20px; flex: 0 0 auto; }
+</style>
+</head>
+<body>
+<h1>Renderer-parity sweep — oksvg ↔ browser canvas, 16→1024</h1>
+<p class="hint">Same SVG, both rasterizers at the <b>same square R×R</b> on white (PNG natural size asserted == R).
+Numbers are the shared Go <code>diffPixels</code> via wasm. The <b>oksvg (A)</b> column is rendered at build time into static PNGs (oksvg runs in the Go toolchain, not the browser); the browser rasterizes <b>B</b>. <b>Click any cell</b> to see oksvg (A),
+browser (B), and amplified difference — upscaled nearest-neighbor, so low resolutions blow up blocky.
+Cells are heat-mapped per table: <span class="legend">low&nbsp;<i></i>&nbsp;high</span> divergence.</p>
+<p id="status">loading…</p>
+<h3 id="h1" hidden>changed pixels (%) — expect this to fall as R rises</h3>
+<div class="tw"><table id="t-changed" hidden></table></div>
+<h3 id="h2" hidden>mean channel Δ (0–255)</h3>
+<div class="tw"><table id="t-mean" hidden></table></div>
+<h3 id="h3" hidden>max channel Δ (0–255)</h3>
+<div class="tw"><table id="t-max" hidden></table></div>
+
+<div id="viewer" hidden>
+  <h3 id="vlabel"></h3>
+  <label>amplify: <input type="range" id="amp" min="1" max="64" value="12"><span id="ampv" class="hint">12×</span></label>
+  <div class="views">
+    <figure><canvas id="vA" class="view"></canvas><figcaption>oksvg (A)</figcaption></figure>
+    <figure><canvas id="vB" class="view"></canvas><figcaption>browser (B)</figcaption></figure>
+    <figure><canvas id="vD" class="view"></canvas><figcaption>difference ×<span id="ampd">12</span></figcaption></figure>
+  </div>
+</div>
+
+<aside class="dep-note">
+  <b>⚠ Patched dependency.</b> The renderer behind column <b>A</b> is
+  <a href="https://github.com/fyne-io/oksvg" target="_blank" rel="noopener">oksvg</a> (BSD-3), a project dependency
+  used in the Go toolchain. Upstream oksvg has a stroke-width scaling bug: stroke width does not scale with the
+  canvas, so strokes render too thick at low resolutions and too thin at high ones. svgsteg carries a small patch that fixes it, which is
+  what makes the browser-vs-internal comparison meaningful. Toggle to <b>upstream</b> to re-run the tables against
+  the unpatched renders and see the bug:
+  <div id="oksvgbar" hidden style="margin-top:8px">oksvg render:
+    <label><input type="radio" name="oksvg" value="img" checked> patched</label> &nbsp;
+    <label><input type="radio" name="oksvg" value="img-upstream"> upstream</label></div>
+</aside>
+
+<script src="footer.js" integrity="sha384-4ZkDFUvrF+CZkUWyzf74+NfA1HDJ71yUMYNwdc0s6Zp22NawJsb7+Rdrx9eRTlDT"></script>
+<script src="wasm_exec.js" integrity="sha384-PWCs+V4BDf9yY1yjkD/p+9xNEs4iEbuvq+HezAOJiY3XL5GI6VyJXMsvnjiwNbce"></script>
+<script>
+let FIXTURES = ['diagonal', 'curve', 'circle', 'fill']; // replaced by parity/fixtures.json at runtime
+const RES = [16, 32, 64, 128, 256, 512, 1024];
+
+// Load an image, retrying transient failures (the local dev server flakes under rapid loads).
+function loadImage(url, tries = 4) {
+  return new Promise((res, rej) => {
+    const attempt = (n) => {
+      const img = new Image();
+      let settled = false;
+      const timer = setTimeout(() => { img.src = ''; fire(false); }, 12000); // timeout long enough for a cold burst, short enough that a truly hung connection retries
+      function fire(ok) {
+        if (settled) return; settled = true; clearTimeout(timer);
+        if (ok) return res(img);
+        n > 1 ? setTimeout(() => attempt(n - 1), 150) : rej(new Error('load failed: ' + url));
+      }
+      img.onload = () => fire(true);
+      img.onerror = () => fire(false);
+      img.src = url + (n < tries ? (url.includes('?') ? '&' : '?') + 'r=' + n : ''); // cache-bust on retry
+    };
+    attempt(tries);
+  });
+}
+
+// Draw a source onto a white R×R canvas, return its RGBA bytes. For the oksvg PNG, assert the
+// natural size equals R so a scale mismatch errors loudly instead of silently measuring scaling.
+async function rasterize(url, size, assertNatural) {
+  const img = await loadImage(url);
+  if (assertNatural && (img.naturalWidth !== size || img.naturalHeight !== size)) {
+    throw new Error(`${url}: natural ${img.naturalWidth}×${img.naturalHeight} ≠ R=${size}`);
+  }
+  const c = document.createElement('canvas'); c.width = size; c.height = size;
+  const cx = c.getContext('2d');
+  cx.fillStyle = '#fff'; cx.fillRect(0, 0, size, size);
+  cx.drawImage(img, 0, 0, size, size);
+  return new Uint8Array(cx.getImageData(0, 0, size, size).data.buffer);
+}
+
+function table(id, metric, digits, withHeat = true) {
+  const t = document.getElementById(id);
+  const fmt = x => Number.isFinite(x) ? x.toFixed(digits) : '—';
+  const val = (r, f) => { const c = window.parityResults[r] && window.parityResults[r][f]; return c ? c[metric] : NaN; };
+  let max = 0;
+  if (withHeat) {
+    for (const r of RES) for (const f of FIXTURES) { const x = val(r, f); if (Number.isFinite(x) && x > max) max = x; }
+    if (OKSVG === 'img' && max > 0) baseMax[metric] = max;                  // remember the patched scale
+    else if (OKSVG !== 'img' && baseMax[metric] > 0) max = baseMax[metric]; // shade upstream against it → regressions go red
+  }
+  // green=low, red=high; sqrt spreads the low end so mid-R cells stay distinguishable
+  const heat = x => {
+    if (!withHeat || !Number.isFinite(x) || !(max > 0)) return '';
+    const u = Math.sqrt(Math.min(x / max, 1));
+    return ` style="background:hsla(${((1 - u) * 145).toFixed(0)},75%,45%,${(0.10 + u * 0.42).toFixed(2)})"`;
+  };
+  let h = '<thead><tr><th>R</th>' + FIXTURES.map(f => `<th>${f}</th>`).join('') + '<th>mean</th></tr></thead><tbody>';
+  for (const r of RES) {
+    const v = FIXTURES.map(f => val(r, f));
+    const fin = v.filter(Number.isFinite);
+    const avg = fin.length ? fin.reduce((a, b) => a + b, 0) / fin.length : NaN;
+    h += `<tr><td>${r}px</td>` +
+      FIXTURES.map((f, i) => `<td class="n cell"${heat(v[i])} data-f="${f}" data-r="${r}">${fmt(v[i])}</td>`).join('') +
+      `<td class="n"${heat(avg)}>${fmt(avg)}</td></tr>`;
+  }
+  t.innerHTML = h + '</tbody>'; t.hidden = false;
+}
+
+// --- visual viewer: click a cell → show oksvg / browser / amplified diff for that (fixture, R) ---
+let cur = null; // {bufA, bufB, r, f}
+function putBuf(canvas, buf, r) {
+  canvas.width = r; canvas.height = r;
+  canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(buf), r, r), 0, 0);
+}
+function renderDiff() {
+  if (!cur) return;
+  const { bufA, bufB, r } = cur, amp = +document.getElementById('amp').value;
+  const out = new Uint8ClampedArray(r * r * 4);
+  for (let i = 0; i < r * r; i++) {
+    const o = i * 4;
+    const d = Math.max(Math.abs(bufA[o] - bufB[o]), Math.abs(bufA[o + 1] - bufB[o + 1]), Math.abs(bufA[o + 2] - bufB[o + 2]));
+    const v = Math.min(255, d * amp);
+    out[o] = v; out[o + 1] = v ? Math.min(80, v) : 0; out[o + 2] = 0; out[o + 3] = 255;
+  }
+  const c = document.getElementById('vD'); c.width = r; c.height = r;
+  c.getContext('2d').putImageData(new ImageData(out, r, r), 0, 0);
+  document.getElementById('ampd').textContent = amp;
+}
+async function showCell(f, r) {
+  document.querySelectorAll('td.sel').forEach(td => td.classList.remove('sel'));
+  document.querySelectorAll(`td.cell[data-f="${f}"][data-r="${r}"]`).forEach(td => td.classList.add('sel'));
+  const bufA = await rasterize(`out/parity/${OKSVG}/${f}.${r}.oksvg.png`, r, true);   // oksvg
+  const bufB = await rasterize(`out/parity/${f}.svg`, r, false);                // browser
+  cur = { bufA, bufB, r, f };
+  putBuf(document.getElementById('vA'), bufA, r);
+  putBuf(document.getElementById('vB'), bufB, r);
+  renderDiff();
+  document.getElementById('vlabel').textContent = `${f} @ ${r}×${r}`;
+  document.getElementById('viewer').hidden = false;
+}
+
+let OKSVG = 'img';   // A-column render set: img (patched) | img-upstream (pristine)
+let baseMax = {};    // patched per-metric maxes; upstream shades against these so the regression reads as red
+
+async function sweep() { // (re)load + diff every cell against the current OKSVG set, progressively
+  const status = document.getElementById('status');
+  const out = {};
+  window.parityResults = out;
+  for (const id of ['h1', 'h2', 'h3']) document.getElementById(id).hidden = false;
+  const draw = withHeat => { table('t-changed', 'changedPct', 3, withHeat); table('t-mean', 'meanDelta', 3, withHeat); table('t-max', 'maxDelta', 0, withHeat); };
+  draw(false);
+  let done = 0, failed = 0; const total = RES.length * FIXTURES.length;
+  for (const res of RES) { // one resolution at a time; its fixtures load in parallel
+    out[res] = {};
+    await Promise.all(FIXTURES.map(async name => {
+      try {
+        const browser = await rasterize('out/parity/' + name + '.svg', res, false);
+        const oksvg = await rasterize(`out/parity/${OKSVG}/${name}.${res}.oksvg.png`, res, true);
+        const d = window.svgstegDiffPixels(browser, oksvg, res, res);
+        if (d.error) throw new Error(d.error);
+        out[res][name] = d;
+      } catch (e) {
+        out[res][name] = { changedPct: NaN, meanDelta: NaN, maxDelta: NaN, err: String(e && e.message || e) };
+        failed++;
+      }
+      status.textContent = `loading… ${++done}/${total}` + (failed ? ` · ${failed} failed (reload to retry)` : '');
+    }));
+    draw(false);
+  }
+  draw(true);
+  status.textContent = '';
+  showCell(cur ? cur.f : FIXTURES[FIXTURES.length - 1], cur ? cur.r : 128);
+}
+
+async function run() {
+  const status = document.getElementById('status');
+  try {
+    const go = new Go();
+    const WASM_SRI = "{{wasm-integrity}}"; // filled by publish.go for dist; placeholder in raw web/ dev
+    const buf = await (await fetch('out/svgsteg.wasm')).arrayBuffer();
+    if (WASM_SRI.startsWith('sha384-')) {
+      const d = await crypto.subtle.digest('SHA-384', buf);
+      const got = 'sha384-' + btoa(String.fromCharCode(...new Uint8Array(d)));
+      if (got !== WASM_SRI) throw new Error('wasm integrity check failed');
+    } else { console.warn('wasm integrity unverified (raw dev build)'); }
+    const r = await WebAssembly.instantiate(buf, go.importObject);
+    go.run(r.instance);
+    if (!window.svgstegDiffPixels) throw new Error('svgstegDiffPixels not exposed');
+    FIXTURES = await (await fetch('out/parity/fixtures.json')).json();
+
+    document.body.addEventListener('click', e => {
+      const td = e.target.closest('td.cell');
+      if (td) showCell(td.dataset.f, +td.dataset.r);
+    });
+    document.getElementById('amp').addEventListener('input', e => {
+      document.getElementById('ampv').textContent = e.target.value + '×';
+      renderDiff();
+    });
+    document.querySelectorAll('input[name="oksvg"]').forEach(el =>
+      el.addEventListener('change', e => { OKSVG = e.target.value; sweep(); }));
+    document.getElementById('oksvgbar').hidden = false;
+
+    await sweep();
+    window.parityDone = true;
+  } catch (e) {
+    status.textContent = 'error: ' + e.message;
+    window.parityError = e.message;
+  }
+}
+run();
+</script>
+</body>
+</html>
