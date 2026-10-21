@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/andybalholm/brotli v1.2.1
 	github.com/fyne-io/oksvg v0.2.0
-	github.com/klauspost/compress v1.18.6
+	github.com/klauspost/compress v1.18.7
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 )
 
